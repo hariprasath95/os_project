@@ -336,9 +336,6 @@ void
 thread_set_priority (int new_priority) 
 {
   thread_current ()->priority = new_priority;
-   if(lookup_high_priority_thread(&ready_list)->priority > new_priority)
-    thread_yield();
-
 }
 
 /* Returns the current thread's priority. */
@@ -484,53 +481,6 @@ alloc_frame (struct thread *t, size_t size)
   t->stack -= size;
   return t->stack;
 }
-struct thread *
-lookup_high_priority_thread(struct list *thread_list)
-{
-    struct thread *high_priority_thread;
-    int current_priority = -1;
-    struct list_elem *e = NULL,*high_priority_elem = NULL;
-    for (e = list_begin (thread_list); e != list_end (thread_list);
-       e = list_next (e))  
-       {
-         
-        struct thread *current_thread =   list_entry(e, struct thread,elem);
-        if(current_thread->priority > current_priority)
-          {
-            high_priority_thread = current_thread;
-            current_priority = current_thread->priority;
-            high_priority_elem = e;
-
-          }
-       }
-       return high_priority_thread;
-
-}
-struct thread *
-get_high_priority_thread(struct list *ready_list)
-{
-  struct thread *high_priority_thread;
-  int current_priority = -1;
-  struct list_elem *e = NULL,*high_priority_elem = NULL;
- 
-
-  for (e = list_begin (ready_list); e != list_end (ready_list);
-       e = list_next (e))  
-       {
-         
-        struct thread *current_thread =   list_entry(e, struct thread,elem);
-        if(current_thread->priority > current_priority)
-          {
-            high_priority_thread = current_thread;
-            current_priority = current_thread->priority;
-            high_priority_elem = e;
-
-          }
-       }
-       high_priority_elem = list_remove(high_priority_elem);
-       return high_priority_thread;
-
-}
 
 /* Chooses and returns the next thread to be scheduled.  Should
    return a thread from the run queue, unless the run queue is
@@ -543,7 +493,7 @@ next_thread_to_run (void)
   if (list_empty (&ready_list))
     return idle_thread;
   else
-    return get_high_priority_thread(&ready_list);
+    return list_entry (list_pop_front (&ready_list), struct thread, elem);
 }
 
 /* Completes a thread switch by activating the new thread's page
