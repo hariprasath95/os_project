@@ -92,7 +92,8 @@ thread_init (void)
   lock_init (&tid_lock);
   list_init (&ready_list);
   list_init (&all_list);
-
+  list_init(&timer_list);
+  sema_init(&timer_sema,1);
   /* Set up a thread structure for the running thread. */
   initial_thread = running_thread ();
   init_thread (initial_thread, "main", PRI_DEFAULT);
@@ -466,6 +467,7 @@ init_thread (struct thread *t, const char *name, int priority)
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->magic = THREAD_MAGIC;
+  sema_init (&(t->timer),0);
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
@@ -487,9 +489,9 @@ alloc_frame (struct thread *t, size_t size)
 struct thread *
 lookup_high_priority_thread(struct list *thread_list)
 {
-    struct thread *high_priority_thread;
+    struct thread *high_priority_thread = NULL;
     int current_priority = -1;
-    struct list_elem *e = NULL,*high_priority_elem = NULL;
+    struct list_elem *e = NULL;
     for (e = list_begin (thread_list); e != list_end (thread_list);
        e = list_next (e))  
        {
@@ -499,7 +501,6 @@ lookup_high_priority_thread(struct list *thread_list)
           {
             high_priority_thread = current_thread;
             current_priority = current_thread->priority;
-            high_priority_elem = e;
 
           }
        }
@@ -509,7 +510,7 @@ lookup_high_priority_thread(struct list *thread_list)
 struct thread *
 get_high_priority_thread(struct list *ready_list)
 {
-  struct thread *high_priority_thread;
+  struct thread *high_priority_thread = NULL;
   int current_priority = -1;
   struct list_elem *e = NULL,*high_priority_elem = NULL;
  
