@@ -201,6 +201,7 @@ thread_create (const char *name, int priority,
 
   /* Add to run queue. */
   thread_unblock (t);
+  thread_yield();
 
   return tid;
 }
@@ -337,7 +338,10 @@ void
 thread_set_priority (int new_priority) 
 {
   thread_current ()->priority = new_priority;
-   if(lookup_high_priority_thread(&ready_list)->priority > new_priority)
+  struct thread *hpt = lookup_high_priority_thread(&ready_list);
+  if(hpt == NULL)
+    return;
+   if( hpt->priority > new_priority)
     thread_yield();
 
 }
@@ -492,6 +496,8 @@ lookup_high_priority_thread(struct list *thread_list)
     struct thread *high_priority_thread = NULL;
     int current_priority = -1;
     struct list_elem *e = NULL;
+    if(list_size(thread_list)==0)
+      return NULL;
     for (e = list_begin (thread_list); e != list_end (thread_list);
        e = list_next (e))  
        {
@@ -513,7 +519,8 @@ get_high_priority_thread(struct list *ready_list)
   struct thread *high_priority_thread = NULL;
   int current_priority = -1;
   struct list_elem *e = NULL,*high_priority_elem = NULL;
- 
+     if(list_empty(ready_list))
+      return NULL;
 
   for (e = list_begin (ready_list); e != list_end (ready_list);
        e = list_next (e))  
