@@ -31,6 +31,7 @@
 #include <string.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/malloc.h"
 
 /* Initializes semaphore SEMA to VALUE.  A semaphore is a
    nonnegative integer along with two atomic operators for
@@ -41,6 +42,7 @@
 
    - up or "V": increment the value (and wake up one waiting
      thread, if any). */
+void remove_donation(struct donation_info *donation);
 void
 sema_init (struct semaphore *sema, unsigned value) 
 {
@@ -102,6 +104,18 @@ sema_try_down (struct semaphore *sema)
 
   return success;
 }
+void remove_donation(struct donation_info *donation)
+{
+
+  list_remove(&donation->elem);
+  if(!list_empty(&donation->recipient->donation_list))
+  {
+    struct donation_info *first_entry = list_entry(list_front(&donation->recipient->donation_list),struct donation_info,elem);
+    donation->recipient->priority = first_entry->priority_donated;
+  }
+  else
+    donation->recipient->priority = donation->recipient->original_priority;
+}
 
 /* Up or "V" operation on a semaphore.  Increments SEMA's value
    and wakes up one thread of those waiting for SEMA, if any.
@@ -118,6 +132,9 @@ sema_up (struct semaphore *sema)
   if (!list_empty (&sema->waiters)) 
   {
     struct thread* hpt = get_high_priority_thread(&sema->waiters);
+    if(hpt->waiting_for.flag)
+      remove_donation(&hpt->waiting_for);
+      hpt->waiting_for.flag = false;
     thread_unblock(hpt);
     sema->value++;
     intr_set_level (old_level);
@@ -201,6 +218,10 @@ lock_init (struct lock *lock)
    interrupt handler.  This function may be called with
    interrupts disabled, but interrupts will be turned back on if
    we need to sleep. */
+static bool donation_greater_function(const struct list_elem *elem1,const struct list_elem *elem2,void *aux)
+{
+  return list_entry(elem1,struct donation_info,elem)->priority_donated > list_entry(elem2,struct donation_info,elem)->priority_donated; 
+}
 void
 lock_acquire (struct lock *lock)
 {
@@ -211,11 +232,19 @@ lock_acquire (struct lock *lock)
   struct thread* lock_holder = NULL;
   current_thread = thread_current();
   lock_holder = lock->holder;
+  struct donation_info *donation = &current_thread->waiting_for;
+  enum intr_level old_value = intr_disable();
   if(lock_holder!=NULL && lock_holder->priority < current_thread->priority)
   {
      lock_holder->priority = current_thread->priority;
      lock_holder->received_donation = true;
+     donation->priority_donated = current_thread->priority;
+     donation->recipient = lock_holder;
+    current_thread->waiting_for.flag = true;
+
+    list_insert_ordered(&lock_holder->donation_list,&donation->elem,donation_greater_function,NULL);
   }
+  intr_set_level(old_value);
    sema_down (&lock->semaphore);
   lock->holder = thread_current ();
 }
@@ -251,11 +280,11 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
-  if(lock->holder->received_donation)
-  {
-    lock->holder->priority = lock->holder->original_priority;
-    lock->holder->received_donation =false;
-  }
+  // if(lock->holder->received_donation)
+  // {
+  //   //lock->holder->priority = lock->holder->original_priority;
+  //   lock->holder->received_donation =false;
+  // }
   lock->holder = NULL;
   sema_up (&lock->semaphore);
 }

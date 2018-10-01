@@ -468,11 +468,13 @@ init_thread (struct thread *t, const char *name, int priority)
 
   memset (t, 0, sizeof *t);
   t->status = THREAD_BLOCKED;
+  t->waiting_for.flag = false;
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
   t->original_priority = priority;
   t->magic = THREAD_MAGIC;
+  list_init(&t->donation_list);
   sema_init (&(t->timer),0);
 
   old_level = intr_disable ();
