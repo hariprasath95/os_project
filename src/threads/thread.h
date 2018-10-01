@@ -92,6 +92,8 @@ struct thread
     struct list_elem allelem;           /* List element for all threads list. */
     struct semaphore timer;
     int wake_time;
+    int original_priority;               // stores the original priority when donation happens
+    bool received_donation;               // tells whether it received donation or not
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
     struct list_elem timer_elem;    

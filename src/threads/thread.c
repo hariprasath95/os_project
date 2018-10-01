@@ -338,6 +338,7 @@ void
 thread_set_priority (int new_priority) 
 {
   thread_current ()->priority = new_priority;
+  thread_current()->original_priority = new_priority;
   struct thread *hpt = lookup_high_priority_thread(&ready_list);
   if(hpt == NULL)
     return;
@@ -470,6 +471,7 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->original_priority = priority;
   t->magic = THREAD_MAGIC;
   sema_init (&(t->timer),0);
 

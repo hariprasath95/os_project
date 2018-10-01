@@ -58,7 +58,7 @@ sema_init (struct semaphore *sema, unsigned value)
    interrupts disabled, but if it sleeps then the next scheduled
    thread will probably turn interrupts back on. */
 void
-sema_down (struct semaphore *sema) 
+sema_down (struct semaphore *sema) //acquire
 {
   enum intr_level old_level;
 
@@ -71,6 +71,8 @@ sema_down (struct semaphore *sema)
       list_push_back (&sema->waiters, &thread_current ()->elem);
       thread_block ();
     }
+
+  //list_push_back(&sema_holders,&thread_current ()->elem);
   sema->value--;
   intr_set_level (old_level);
 }
@@ -205,8 +207,16 @@ lock_acquire (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
-
-  sema_down (&lock->semaphore);
+  struct thread* current_thread = NULL;
+  struct thread* lock_holder = NULL;
+  current_thread = thread_current();
+  lock_holder = lock->holder;
+  if(lock_holder!=NULL && lock_holder->priority < current_thread->priority)
+  {
+     lock_holder->priority = current_thread->priority;
+     lock_holder->received_donation = true;
+  }
+   sema_down (&lock->semaphore);
   lock->holder = thread_current ();
 }
 
@@ -241,6 +251,11 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
+  if(lock->holder->received_donation)
+  {
+    lock->holder->priority = lock->holder->original_priority;
+    lock->holder->received_donation =false;
+  }
   lock->holder = NULL;
   sema_up (&lock->semaphore);
 }
