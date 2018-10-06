@@ -129,7 +129,7 @@ sema_up (struct semaphore *sema)
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
-  if (!list_empty (&sema->waiters)) 
+  if (!list_empty (&sema->waiters) && !thread_mlfqs) 
   {
     struct thread* hpt = get_high_priority_thread(&sema->waiters);
     if(hpt->waiting_for.flag)
@@ -144,6 +144,8 @@ sema_up (struct semaphore *sema)
   }
   else
   {
+      if(!list_empty (&sema->waiters))
+      thread_unblock(list_entry(list_pop_front(&sema->waiters),struct thread,elem)) ;
       sema->value++;
       intr_set_level (old_level);
   }
@@ -234,7 +236,7 @@ lock_acquire (struct lock *lock)
   lock_holder = lock->holder;
   struct donation_info *donation = &current_thread->waiting_for;
   enum intr_level old_value = intr_disable();
-  if(lock_holder!=NULL && lock_holder->priority < current_thread->priority)
+  if(lock_holder!=NULL && lock_holder->priority < current_thread->priority && !thread_mlfqs)
   {
      lock_holder->priority = current_thread->priority;
      lock_holder->received_donation = true;

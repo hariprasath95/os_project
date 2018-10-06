@@ -24,6 +24,7 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
+#define TIMER_FREQ 100
 struct donation_info
 {
   struct list_elem elem;
@@ -105,6 +106,8 @@ struct thread
     struct list_elem timer_elem;    
     struct list donation_list;
     struct donation_info waiting_for;
+    int nice;                             //holds nice value of the current.starts with 0
+    int recent_cpu;                       //holds the recent cpu value of the thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
@@ -137,6 +140,16 @@ const char *thread_name (void);
 
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);
+void thread_yield_current (struct thread *cur);
+
+void mlfqscalculations(int64_t ticks);
+void calculatedynamicpriority(struct thread* t);
+void calculatedynamicpriorityall(void);
+void calculateloadaverage(void);
+void calculaterecentcpu(struct thread* t);
+void calculaterecentcpuall(void);
+int getloadaverage(void);
+
 
 /* Performs some operation on thread t, given auxiliary data AUX. */
 typedef void thread_action_func (struct thread *t, void *aux);
