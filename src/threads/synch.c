@@ -227,24 +227,24 @@ static bool donation_greater_function(const struct list_elem *elem1,const struct
 priority nested implementation
 
 */
-// void update_nested(struct donation_info *donation)
-// {
-//   struct thread *child_thread = donation->recipient;
-//   enum intr_level  old_val = intr_disable();
-//   while(child_thread->waiting_for.flag)
-//   {
+void update_nested(struct donation_info *donation)
+{
+  struct thread *child_thread = donation->recipient;
+  enum intr_level  old_val = intr_disable();
+  while(child_thread->waiting_for.flag)
+  {
+    struct list_elem *e = &child_thread->waiting_for.elem;
+    list_remove(&(child_thread->waiting_for.elem));
+    struct donation_info *child_donation = list_entry(e,struct donation_info,elem);
+    child_donation->priority_donated = donation->priority_donated;
+    child_donation->recipient->priority = donation->priority_donated;
+    list_insert_ordered(&child_donation->recipient->donation_list,&child_donation->elem,donation_greater_function,NULL);
+    child_thread = child_thread->waiting_for.recipient;
     
-//     struct list_elem *e = list_remove(&(child_thread->waiting_for.elem));
-//     struct donation_info *child_donation = list_entry(e,struct donation_info,elem);
-//     child_donation->priority_donated = donation->priority_donated;
-//     child_donation->recipient->priority = donation->priority_donated;
-//     list_insert_ordered(&child_donation->recipient->donation_list,&child_donation->elem,donation_greater_function,NULL);
-//     child_thread = child_thread->waiting_for.recipient;
-    
-//   }
-//   intr_set_level(old_val);
+  }
+  intr_set_level(old_val);
 
-// }
+}
 void
 lock_acquire (struct lock *lock)
 {
@@ -264,7 +264,7 @@ lock_acquire (struct lock *lock)
      donation->priority_donated = current_thread->priority;
      donation->recipient = lock_holder;
     current_thread->waiting_for.flag = true;
-    //  update_nested(donation); 
+    update_nested(donation); 
     list_insert_ordered(&lock_holder->donation_list,&donation->elem,donation_greater_function,NULL);
   }
   intr_set_level(old_value);
