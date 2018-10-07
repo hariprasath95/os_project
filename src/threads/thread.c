@@ -214,16 +214,16 @@ thread_create (const char *name, int priority,
   
   if (thread_mlfqs)
     {
-      calculaterecentcpu(t);
-      calculatedynamicpriority(t);
-      calculaterecentcpuall();
-      calculatedynamicpriorityall();
+     // calculaterecentcpu(t);
+     // calculatedynamicpriority(t);
+      //calculaterecentcpuall();
+      //calculatedynamicpriorityall();
     }
   
-  if (t->priority > thread_current ()-> priority)
+  if (priority > thread_current ()-> priority && !thread_mlfqs)
     {
-      //thread_yield();
-      thread_yield_current (thread_current ());
+      thread_yield();
+      //thread_yield_current (thread_current ());
     }
   
 
@@ -434,7 +434,7 @@ thread_set_nice (int nice)
         }
       else if(!list_empty(&ready_list)) 
       {
-        if(thread_current()->status == THREAD_RUNNING && lookup_high_priority_thread(&ready_list)->priority > thread_current()->priority)       
+        if(thread_current()->status == THREAD_RUNNING && list_entry (list_begin (&ready_list),struct thread,elem)->priority > thread_current()->priority)       
         {
           thread_yield();
         }
@@ -454,7 +454,10 @@ thread_get_nice (void)
 int
 thread_get_load_avg (void) 
 {
-  return CONVERT_TO_INT_NEAREST(MULT_INT(load_average,100));
+  enum intr_level original_interrupt_state = intr_disable();
+  int value = CONVERT_TO_INT_NEAREST(MULT_INT(load_average,100));
+  intr_set_level(original_interrupt_state);
+  return value;
 }
 
 /* Returns 100 times the current thread's recent_cpu value. */
@@ -740,11 +743,13 @@ void mlfqscalculations(int64_t ticks)
     {
         calculateloadaverage();
         calculaterecentcpuall();
+        calculatedynamicpriorityall();
     }
 
     if(ticks % TIME_SLICE == 0)
     {
-        calculatedynamicpriorityall();
+        calculatedynamicpriority(thread_current());
+        //intr_yield_on_return();
     }
   }
 }
@@ -784,12 +789,11 @@ void calculatedynamicpriority(struct thread* t)
   {
     //int div = DIV_INT(t->recent_cpu,4);
     //int mult = t->nice*2;
-    int new_priority = PRI_MAX -
-        CONVERT_TO_INT_NEAREST (DIV_INT (t->recent_cpu, 4)) -  t->nice * 2;
-    if(new_priority < PRI_MIN)
-      new_priority = PRI_MIN;
-    if(new_priority > PRI_MAX)
-      new_priority = PRI_MAX;
+    t->priority = PRI_MAX - CONVERT_TO_INT_NEAREST (DIV_INT (t->recent_cpu, 4)) -  t->nice * 2;
+    if(t->priority < PRI_MIN)
+      t->priority = PRI_MIN;
+    if(t->priority > PRI_MAX)
+      t->priority = PRI_MAX;
   }
   
 }
