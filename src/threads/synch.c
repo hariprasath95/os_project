@@ -142,12 +142,21 @@ sema_up (struct semaphore *sema)
       (intr_context()) ? intr_yield_on_return() : thread_yield();
       
   }
-  else
+  else if(thread_mlfqs)
   {
+    struct thread* t = NULL;
       if(!list_empty (&sema->waiters))
-      thread_unblock(list_entry(list_pop_front(&sema->waiters),struct thread,elem)) ;
+      {
+         t = get_high_priority_thread(&sema->waiters);
+         thread_unblock(t) ;
+      }
+      
       sema->value++;
-      intr_set_level (old_level);
+      
+      if( t!= NULL && t->priority > thread_current()->priority)
+        (intr_context()) ? intr_yield_on_return() : thread_yield();
+
+        intr_set_level (old_level);
   }
 }
 
@@ -233,22 +242,29 @@ lock_acquire (struct lock *lock)
   struct thread* current_thread = NULL;
   struct thread* lock_holder = NULL;
   current_thread = thread_current();
+  int id = thread_tid();
   lock_holder = lock->holder;
-  struct donation_info *donation = &current_thread->waiting_for;
-  enum intr_level old_value = intr_disable();
-  if(lock_holder!=NULL && lock_holder->priority < current_thread->priority && !thread_mlfqs)
-  {
-     lock_holder->priority = current_thread->priority;
-     lock_holder->received_donation = true;
-     donation->priority_donated = current_thread->priority;
-     donation->recipient = lock_holder;
-    current_thread->waiting_for.flag = true;
 
+  if(thread_mlfqs)
+  {
+    sema_down (&lock->semaphore);
+    lock->holder = thread_current ();
+    return;
+  } 
+  
+  enum intr_level old_value = intr_disable();
+  if(lock_holder!=NULL && lock_holder->priority < current_thread->priority )
+  {
+    struct donation_info *donation = &current_thread->waiting_for;
+    lock_holder->priority = current_thread->priority;
+    lock_holder->received_donation = true;
+    donation->priority_donated = current_thread->priority;
+    donation->recipient = lock_holder;
+    current_thread->waiting_for.flag = true;
     list_insert_ordered(&lock_holder->donation_list,&donation->elem,donation_greater_function,NULL);
   }
   intr_set_level(old_value);
-   sema_down (&lock->semaphore);
-  lock->holder = thread_current ();
+  
 }
 
 /* Tries to acquires LOCK and returns true if successful or false
