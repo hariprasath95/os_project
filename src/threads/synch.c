@@ -129,13 +129,13 @@ sema_up (struct semaphore *sema)
   ASSERT (sema != NULL);
 
   old_level = intr_disable ();
-  if (!list_empty (&sema->waiters) && !thread_mlfqs) 
+  if (!list_empty (&sema->waiters)) 
   {
     struct thread* hpt = get_high_priority_thread(&sema->waiters);
-    if(hpt->waiting_for.flag)
-      remove_donation(&hpt->waiting_for);
+    if(!thread_mlfqs && hpt->waiting_for.flag)
+     { remove_donation(&hpt->waiting_for);
       hpt->waiting_for.flag = false;
-    thread_unblock(hpt);
+     }thread_unblock(hpt);
     sema->value++;
     intr_set_level (old_level);
     if(thread_current()->priority < hpt->priority)  
