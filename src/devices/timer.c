@@ -106,7 +106,7 @@ static void check_timer(void)
 }
 static bool timer_less_function (const struct list_elem *a,
                              const struct list_elem *b,
-                             void *aux)
+                             void *aux UNUSED)
 {
   return ((list_entry(a,struct thread,timer_elem))->wake_time < ((list_entry(b,struct thread,timer_elem))->wake_time));
 }

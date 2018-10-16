@@ -43,6 +43,7 @@
    - up or "V": increment the value (and wake up one waiting
      thread, if any). */
 void remove_donation(struct donation_info *donation);
+static void update_nested(struct donation_info *donation);
 void
 sema_init (struct semaphore *sema, unsigned value) 
 {
@@ -220,7 +221,7 @@ lock_init (struct lock *lock)
    interrupt handler.  This function may be called with
    interrupts disabled, but interrupts will be turned back on if
    we need to sleep. */
-static bool donation_greater_function(const struct list_elem *elem1,const struct list_elem *elem2,void *aux)
+static bool donation_greater_function(const struct list_elem *elem1,const struct list_elem *elem2,void *aux UNUSED)
 {
   return list_entry(elem1,struct donation_info,elem)->priority_donated > list_entry(elem2,struct donation_info,elem)->priority_donated; 
 }
@@ -229,7 +230,7 @@ static bool donation_greater_function(const struct list_elem *elem1,const struct
 priority nested implementation
 
 */
-void update_nested(struct donation_info *donation)
+static void update_nested(struct donation_info *donation)
 {
   struct thread *child_thread = donation->recipient;
   enum intr_level  old_val = intr_disable();
