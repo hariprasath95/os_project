@@ -210,7 +210,8 @@ timer_interrupt (struct intr_frame *args UNUSED)
   ticks++;
   thread_tick ();
   check_timer();
-  mlfqscalculations(ticks);
+  if(thread_mlfqs)
+    mlfqscalculations(ticks);
 
 }
 

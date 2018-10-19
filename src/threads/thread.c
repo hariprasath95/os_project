@@ -603,7 +603,7 @@ get_high_priority_thread(struct list *ready_list)
 
           }
 
-        else if(current_thread->priority == current_priority)
+        else if(current_thread->priority == current_priority && thread_mlfqs)
         {
             if(current_thread->recent_cpu < high_priority_thread->recent_cpu)
             {
@@ -708,7 +708,8 @@ void mlfqscalculations(int64_t ticks)
   {
     if(thread_current()->status == THREAD_RUNNING)
     {
-      thread_current()->recent_cpu = ADD_INTEGER(thread_current()->recent_cpu,1);
+      int current_recentcpu = thread_current()->recent_cpu;
+      thread_current()->recent_cpu = ADD_INTEGER(current_recentcpu,1);
     }
 
     if(ticks % TIMER_FREQ == 0)
