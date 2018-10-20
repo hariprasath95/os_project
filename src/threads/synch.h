@@ -50,4 +50,7 @@ void cond_broadcast (struct condition *, struct lock *);
    reference guide for more information.*/
 #define barrier() asm volatile ("" : : : "memory")
 
+struct donation_info;
+void update_nested(struct donation_info *donation); /* function used for priority donation*/
+
 #endif /* threads/synch.h */

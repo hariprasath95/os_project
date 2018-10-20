@@ -133,11 +133,14 @@ sema_up (struct semaphore *sema)
   {
     struct thread* hpt = get_high_priority_thread(&sema->waiters);
     if(!thread_mlfqs && hpt->waiting_for.flag)
-     { remove_donation(&hpt->waiting_for);
-      hpt->waiting_for.flag = false;
-     }thread_unblock(hpt);
+     { 
+        remove_donation(&hpt->waiting_for);
+        hpt->waiting_for.flag = false;
+     }
+    thread_unblock(hpt);
     sema->value++;
     intr_set_level (old_level);
+    
     if(thread_current()->priority < hpt->priority)  
       (intr_context()) ? intr_yield_on_return() : thread_yield();
       
@@ -220,7 +223,7 @@ lock_init (struct lock *lock)
    interrupt handler.  This function may be called with
    interrupts disabled, but interrupts will be turned back on if
    we need to sleep. */
-static bool donation_greater_function(const struct list_elem *elem1,const struct list_elem *elem2,void *aux)
+static bool donation_greater_function(const struct list_elem *elem1,const struct list_elem *elem2,void *aux UNUSED)
 {
   return list_entry(elem1,struct donation_info,elem)->priority_donated > list_entry(elem2,struct donation_info,elem)->priority_donated; 
 }
@@ -386,8 +389,8 @@ cond_more (const struct list_elem *a, const struct list_elem *b,
 {
   ASSERT (a != NULL);
   ASSERT (b != NULL);
-  const struct semaphore_elem *sema1 = list_entry (a, struct semaphore_elem, elem);
-  const struct semaphore_elem *sema2 = list_entry (b, struct semaphore_elem, elem);
+  struct semaphore_elem *sema1 = list_entry (a, struct semaphore_elem, elem);
+  struct semaphore_elem *sema2 = list_entry (b, struct semaphore_elem, elem);
 
    struct thread *t1 = list_entry (list_front(&sema1->semaphore.waiters), struct thread, elem);
    struct thread *t2 = list_entry (list_front(&sema2->semaphore.waiters), struct thread, elem);

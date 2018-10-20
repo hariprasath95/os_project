@@ -702,6 +702,8 @@ schedule (void)
   thread_schedule_tail (prev);
 }
 
+/*  This function will do calculations based on this ticks */
+
 void mlfqscalculations(int64_t ticks)
 {
   if(thread_mlfqs)

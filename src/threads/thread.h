@@ -147,6 +147,7 @@ void calculatedynamicpriorityall(void);
 void calculateloadaverage(void);
 void calculaterecentcpu(struct thread* t);
 void calculaterecentcpuall(void);
+void setloadaverage(int value);
 int getloadaverage(void);
 
 
