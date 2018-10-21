@@ -140,7 +140,6 @@ const char *thread_name (void);
 
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);
-void thread_yield_current (struct thread *cur);
 
 void mlfqscalculations(int64_t ticks);
 void calculatedynamicpriority(struct thread* t);
@@ -148,6 +147,7 @@ void calculatedynamicpriorityall(void);
 void calculateloadaverage(void);
 void calculaterecentcpu(struct thread* t);
 void calculaterecentcpuall(void);
+void setloadaverage(int value);
 int getloadaverage(void);
 
 
