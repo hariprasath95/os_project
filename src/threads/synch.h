@@ -11,6 +11,8 @@ struct semaphore
     struct list waiters;        /* List of waiting threads. */
   };
 
+  //struct list sema_holders;
+
 void sema_init (struct semaphore *, unsigned value);
 void sema_down (struct semaphore *);
 bool sema_try_down (struct semaphore *);
@@ -47,5 +49,7 @@ void cond_broadcast (struct condition *, struct lock *);
    optimization barrier.  See "Optimization Barriers" in the
    reference guide for more information.*/
 #define barrier() asm volatile ("" : : : "memory")
+
+struct donation_info;
 
 #endif /* threads/synch.h */

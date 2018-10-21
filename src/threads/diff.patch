@@ -1,0 +1,756 @@
+diff --git a/src/devices/timer.c b/src/devices/timer.c
+index befaaae..5f487fa 100644
+--- a/src/devices/timer.c
++++ b/src/devices/timer.c
+@@ -29,6 +29,7 @@ static bool too_many_loops (unsigned loops);
+ static void busy_wait (int64_t loops);
+ static void real_time_sleep (int64_t num, int32_t denom);
+ static void real_time_delay (int64_t num, int32_t denom);
++static void check_timer(void);
+ 
+ /* Sets up the timer to interrupt TIMER_FREQ times per second,
+    and registers the corresponding interrupt. */
+@@ -84,16 +85,52 @@ timer_elapsed (int64_t then)
+   return timer_ticks () - then;
+ }
+ 
++static void check_timer(void)
++{
++  if(timer_sema.value == 0)
++    return;
++  if(list_empty(&timer_list))
++    return;  
++  for (struct list_elem *e = list_begin (&timer_list); e != list_end (&timer_list); e = list_next (e)) 
++    {
++      struct thread *thread = list_entry (e, struct thread,timer_elem );
++     if(timer_ticks() >= thread->wake_time)
++      {
++        list_remove(e);
++        sema_up(&(thread->timer));
++      }
++    else
++      break;
++    }
++
++}
++static bool timer_less_function (const struct list_elem *a,
++                             const struct list_elem *b,
++                             void *aux UNUSED)
++{
++  return ((list_entry(a,struct thread,timer_elem))->wake_time < ((list_entry(b,struct thread,timer_elem))->wake_time));
++}
++
+ /* Sleeps for approximately TICKS timer ticks.  Interrupts must
+    be turned on. */
+ void
+ timer_sleep (int64_t ticks) 
+ {
+   int64_t start = timer_ticks ();
+-
+-  ASSERT (intr_get_level () == INTR_ON);
+-  while (timer_elapsed (start) < ticks) 
+-    thread_yield ();
++  sema_down(&timer_sema);
++  
++  if(thread_current()->timer.value !=0)
++    sema_init(&(thread_current()->timer),0);
++   
++  thread_current()->wake_time = start + ticks;
++  
++  if(list_empty(&timer_list))
++    list_push_back(&timer_list,&(thread_current()->timer_elem));
++  else   
++    list_insert_ordered(&timer_list,&(thread_current()->timer_elem),timer_less_function,NULL);
++  
++  sema_up(&timer_sema);
++  sema_down(&(thread_current()->timer));
+ }
+ 
+ /* Sleeps for approximately MS milliseconds.  Interrupts must be
+@@ -172,6 +209,10 @@ timer_interrupt (struct intr_frame *args UNUSED)
+ {
+   ticks++;
+   thread_tick ();
++  check_timer();
++  if(thread_mlfqs)
++    mlfqscalculations(ticks);  /* do all necessary calculations for mlfqs only if mlfqs is enabled */
++
+ }
+ 
+ /* Returns true if LOOPS iterations waits for more than one timer
+diff --git a/src/threads/synch.c b/src/threads/synch.c
+index 317c68a..a30b0c9 100644
+--- a/src/threads/synch.c
++++ b/src/threads/synch.c
+@@ -31,6 +31,7 @@
+ #include <string.h>
+ #include "threads/interrupt.h"
+ #include "threads/thread.h"
++#include "threads/malloc.h"
+ 
+ /* Initializes semaphore SEMA to VALUE.  A semaphore is a
+    nonnegative integer along with two atomic operators for
+@@ -41,6 +42,8 @@
+ 
+    - up or "V": increment the value (and wake up one waiting
+      thread, if any). */
++void remove_donation(struct donation_info *donation);
++static void update_nested(struct donation_info *donation);
+ void
+ sema_init (struct semaphore *sema, unsigned value) 
+ {
+@@ -58,7 +61,7 @@ sema_init (struct semaphore *sema, unsigned value)
+    interrupts disabled, but if it sleeps then the next scheduled
+    thread will probably turn interrupts back on. */
+ void
+-sema_down (struct semaphore *sema) 
++sema_down (struct semaphore *sema) //acquire
+ {
+   enum intr_level old_level;
+ 
+@@ -71,6 +74,8 @@ sema_down (struct semaphore *sema)
+       list_push_back (&sema->waiters, &thread_current ()->elem);
+       thread_block ();
+     }
++
++  //list_push_back(&sema_holders,&thread_current ()->elem);
+   sema->value--;
+   intr_set_level (old_level);
+ }
+@@ -100,6 +105,18 @@ sema_try_down (struct semaphore *sema)
+ 
+   return success;
+ }
++void remove_donation(struct donation_info *donation)
++{
++
++  list_remove(&donation->elem);
++  if(!list_empty(&donation->recipient->donation_list))
++  {
++    struct donation_info *first_entry = list_entry(list_front(&donation->recipient->donation_list),struct donation_info,elem);
++    donation->recipient->priority = first_entry->priority_donated;
++  }
++  else
++    donation->recipient->priority = donation->recipient->original_priority;
++}
+ 
+ /* Up or "V" operation on a semaphore.  Increments SEMA's value
+    and wakes up one thread of those waiting for SEMA, if any.
+@@ -114,10 +131,28 @@ sema_up (struct semaphore *sema)
+ 
+   old_level = intr_disable ();
+   if (!list_empty (&sema->waiters)) 
+-    thread_unblock (list_entry (list_pop_front (&sema->waiters),
+-                                struct thread, elem));
+-  sema->value++;
+-  intr_set_level (old_level);
++  {
++    struct thread* hpt = get_high_priority_thread(&sema->waiters);
++    if(!thread_mlfqs && hpt->waiting_for.flag)
++     { 
++        remove_donation(&hpt->waiting_for);
++        hpt->waiting_for.flag = false;
++     }
++    thread_unblock(hpt);
++    sema->value++;
++    intr_set_level (old_level);
++    
++    if(thread_current()->priority < hpt->priority)  
++      (intr_context()) ? intr_yield_on_return() : thread_yield();
++      
++  }
++  else
++  {
++      if(!list_empty (&sema->waiters))
++      thread_unblock(list_entry(list_pop_front(&sema->waiters),struct thread,elem)) ;
++      sema->value++;
++      intr_set_level (old_level);
++  }
+ }
+ 
+ static void sema_test_helper (void *sema_);
+@@ -189,14 +224,56 @@ lock_init (struct lock *lock)
+    interrupt handler.  This function may be called with
+    interrupts disabled, but interrupts will be turned back on if
+    we need to sleep. */
++static bool donation_greater_function(const struct list_elem *elem1,const struct list_elem *elem2,void *aux UNUSED)
++{
++  return list_entry(elem1,struct donation_info,elem)->priority_donated > list_entry(elem2,struct donation_info,elem)->priority_donated; 
++}
++
++/*
++priority nested implementation
++
++*/
++static void update_nested(struct donation_info *donation)
++{
++  struct thread *child_thread = donation->recipient;
++  enum intr_level  old_val = intr_disable();
++  while(child_thread->waiting_for.flag)
++  {
++    struct list_elem *e = &child_thread->waiting_for.elem;
++    list_remove(&(child_thread->waiting_for.elem));
++    struct donation_info *child_donation = list_entry(e,struct donation_info,elem);
++    child_donation->priority_donated = donation->priority_donated;
++    child_donation->recipient->priority = donation->priority_donated;
++    list_insert_ordered(&child_donation->recipient->donation_list,&child_donation->elem,donation_greater_function,NULL);
++    child_thread = child_thread->waiting_for.recipient;
++    
++  }
++  intr_set_level(old_val);
++
++}
+ void
+ lock_acquire (struct lock *lock)
+ {
+   ASSERT (lock != NULL);
+   ASSERT (!intr_context ());
+   ASSERT (!lock_held_by_current_thread (lock));
+-
+-  sema_down (&lock->semaphore);
++  struct thread* current_thread = NULL;
++  struct thread* lock_holder = NULL;
++  current_thread = thread_current();
++  lock_holder = lock->holder;
++  struct donation_info *donation = &current_thread->waiting_for;
++  
++  if(lock_holder!=NULL && lock_holder->priority < current_thread->priority && !thread_mlfqs)
++  {
++     lock_holder->priority = current_thread->priority;
++     lock_holder->received_donation = true;
++     donation->priority_donated = current_thread->priority;
++     donation->recipient = lock_holder;
++    current_thread->waiting_for.flag = true;
++    update_nested(donation); 
++    list_insert_ordered(&lock_holder->donation_list,&donation->elem,donation_greater_function,NULL);
++  }
++   sema_down (&lock->semaphore);
+   lock->holder = thread_current ();
+ }
+ 
+@@ -301,6 +378,21 @@ cond_wait (struct condition *cond, struct lock *lock)
+   lock_acquire (lock);
+ }
+ 
++static bool
++cond_more (const struct list_elem *a, const struct list_elem *b,
++               void *aux UNUSED)
++{
++  ASSERT (a != NULL);
++  ASSERT (b != NULL);
++  struct semaphore_elem *sema1 = list_entry (a, struct semaphore_elem, elem);
++  struct semaphore_elem *sema2 = list_entry (b, struct semaphore_elem, elem);
++
++   struct thread *t1 = list_entry (list_front(&sema1->semaphore.waiters), struct thread, elem);
++   struct thread *t2 = list_entry (list_front(&sema2->semaphore.waiters), struct thread, elem);
++
++  return t1->priority > t2->priority;
++}
++
+ /* If any threads are waiting on COND (protected by LOCK), then
+    this function signals one of them to wake up from its wait.
+    LOCK must be held before calling this function.
+@@ -316,6 +408,8 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
+   ASSERT (!intr_context ());
+   ASSERT (lock_held_by_current_thread (lock));
+ 
++  list_sort(&cond->waiters, cond_more, NULL);
++
+   if (!list_empty (&cond->waiters)) 
+     sema_up (&list_entry (list_pop_front (&cond->waiters),
+                           struct semaphore_elem, elem)->semaphore);
+diff --git a/src/threads/synch.h b/src/threads/synch.h
+index a19e88b..073ea0f 100644
+--- a/src/threads/synch.h
++++ b/src/threads/synch.h
+@@ -11,6 +11,8 @@ struct semaphore
+     struct list waiters;        /* List of waiting threads. */
+   };
+ 
++  //struct list sema_holders;
++
+ void sema_init (struct semaphore *, unsigned value);
+ void sema_down (struct semaphore *);
+ bool sema_try_down (struct semaphore *);
+@@ -48,4 +50,6 @@ void cond_broadcast (struct condition *, struct lock *);
+    reference guide for more information.*/
+ #define barrier() asm volatile ("" : : : "memory")
+ 
++struct donation_info;
++
+ #endif /* threads/synch.h */
+diff --git a/src/threads/thread.c b/src/threads/thread.c
+index 87f22b8..3a068d0 100644
+--- a/src/threads/thread.c
++++ b/src/threads/thread.c
+@@ -20,6 +20,23 @@
+    of thread.h for details. */
+ #define THREAD_MAGIC 0xcd6abf4b
+ 
++#ifndef FIXED_POINT_H
++#define FIXED_POINT_H
++
++#define FRACTION 1 << (14)
++
++
++#define CONVERT_TO_FIXED_POINT(n) (n) * (FRACTION)
++#define CONVERT_TO_INTEGER_ROUNDED_NEAREST(x) ((x) < 0 ? ((x) - (FRACTION) / 2)/ (FRACTION) : ((x) + (FRACTION) / 2) / (FRACTION))  
++#define ADD_INTEGER(x, n) (x) + (n) * (FRACTION)
++#define MULTIPLY_FIXED_POINT(x, y) ((int64_t)(x)) * (y) / (FRACTION)
++#define MULTIPLY_INTEGER(x, n) (x) * (n)
++#define DIVIDE_FIXED_POINT(x, y) ((int64_t)(x)) * (FRACTION) / (y)
++#define DIVIDE_INTEGER(x, n) (x) / (n)
++#endif
++
++static int load_average;
++
+ /* List of processes in THREAD_READY state, that is, processes
+    that are ready to run but not actually running. */
+ static struct list ready_list;
+@@ -70,6 +87,8 @@ static void *alloc_frame (struct thread *, size_t size);
+ static void schedule (void);
+ void thread_schedule_tail (struct thread *prev);
+ static tid_t allocate_tid (void);
++static bool priority_more(const struct list_elem *a_,const struct list_elem *b_,void *aux UNUSED);
++struct thread *lookup_current_thread(struct list *thread_list);
+ 
+ /* Initializes the threading system by transforming the code
+    that's currently running into a thread.  This can't work in
+@@ -88,10 +107,13 @@ void
+ thread_init (void) 
+ {
+   ASSERT (intr_get_level () == INTR_OFF);
++  setloadaverage(0);
+ 
+   lock_init (&tid_lock);
+   list_init (&ready_list);
+   list_init (&all_list);
++  list_init(&timer_list);
++  sema_init(&timer_sema,1);
+ 
+   /* Set up a thread structure for the running thread. */
+   initial_thread = running_thread ();
+@@ -183,6 +205,8 @@ thread_create (const char *name, int priority,
+   init_thread (t, name, priority);
+   tid = t->tid = allocate_tid ();
+ 
++  enum intr_level old_context = intr_disable();
++
+   /* Stack frame for kernel_thread(). */
+   kf = alloc_frame (t, sizeof *kf);
+   kf->eip = NULL;
+@@ -198,9 +222,13 @@ thread_create (const char *name, int priority,
+   sf->eip = switch_entry;
+   sf->ebp = 0;
+ 
+-  /* Add to run queue. */
+-  thread_unblock (t);
++  intr_set_level (old_context);
+ 
++  thread_unblock (t);
++  
++    if (!thread_mlfqs && priority > thread_current ()-> priority)
++      thread_yield();
++  
+   return tid;
+ }
+ 
+@@ -237,7 +265,7 @@ thread_unblock (struct thread *t)
+ 
+   old_level = intr_disable ();
+   ASSERT (t->status == THREAD_BLOCKED);
+-  list_push_back (&ready_list, &t->elem);
++  list_insert_ordered(&ready_list, &t->elem, priority_more, NULL);
+   t->status = THREAD_READY;
+   intr_set_level (old_level);
+ }
+@@ -308,12 +336,24 @@ thread_yield (void)
+ 
+   old_level = intr_disable ();
+   if (cur != idle_thread) 
+-    list_push_back (&ready_list, &cur->elem);
++    list_insert_ordered(&ready_list, &cur->elem, priority_more, NULL);
+   cur->status = THREAD_READY;
+   schedule ();
+   intr_set_level (old_level);
+ }
+ 
++static bool
++priority_more (const struct list_elem *a_, const struct list_elem *b_,
++               void *aux UNUSED)
++{
++  ASSERT (a_ != NULL);
++  ASSERT (b_ != NULL);
++  const struct thread *a = list_entry (a_, struct thread, elem);
++  const struct thread *b = list_entry (b_, struct thread, elem);
++
++  return a->priority > b->priority;
++}
++
+ /* Invoke function 'func' on all threads, passing along 'aux'.
+    This function must be called with interrupts off. */
+ void
+@@ -335,7 +375,16 @@ thread_foreach (thread_action_func *func, void *aux)
+ void
+ thread_set_priority (int new_priority) 
+ {
++  if(thread_current ()->priority == thread_current()->original_priority)
+   thread_current ()->priority = new_priority;
++  thread_current()->original_priority = new_priority;
++  struct thread *hpt = list_entry (list_begin (&ready_list),struct thread,elem);
++  if(hpt == NULL)
++    return;
++
++   if( hpt->priority > new_priority)
++        thread_yield();
++
+ }
+ 
+ /* Returns the current thread's priority. */
+@@ -347,33 +396,50 @@ thread_get_priority (void)
+ 
+ /* Sets the current thread's nice value to NICE. */
+ void
+-thread_set_nice (int nice UNUSED) 
++thread_set_nice (int nice) 
+ {
+-  /* Not yet implemented. */
++  ASSERT(nice >= -20 && nice <= 20);
++  thread_current()->nice = nice;
++  calculatedynamicpriority(thread_current());
++    if (thread_current() != idle_thread)
++    {
++      if (thread_current()->status == THREAD_READY)
++        {
++          enum intr_level old_level;
++          list_remove (&thread_current()->elem);
++          list_insert_ordered (&ready_list, &thread_current()->elem, priority_more, NULL);
++         }
++      else if(!list_empty(&ready_list)) 
++      {
++        if(thread_current()->status == THREAD_RUNNING && list_entry (list_begin (&ready_list),struct thread,elem)->priority > thread_current()->priority)       
++          thread_yield();
++      }
++    }
++  return;
+ }
+ 
+ /* Returns the current thread's nice value. */
+ int
+ thread_get_nice (void) 
+ {
+-  /* Not yet implemented. */
+-  return 0;
++  return thread_current()->nice;
+ }
+ 
+ /* Returns 100 times the system load average. */
+ int
+ thread_get_load_avg (void) 
+ {
+-  /* Not yet implemented. */
+-  return 0;
++  int value = MULTIPLY_INTEGER(getloadaverage(),100);
++  int result = CONVERT_TO_INTEGER_ROUNDED_NEAREST(value);
++  return result;
+ }
+ 
+ /* Returns 100 times the current thread's recent_cpu value. */
+ int
+ thread_get_recent_cpu (void) 
+ {
+-  /* Not yet implemented. */
+-  return 0;
++  int value = MULTIPLY_INTEGER (thread_current ()->recent_cpu,100);
++  return CONVERT_TO_INTEGER_ROUNDED_NEAREST (value);
+ }
+ 
+ /* Idle thread.  Executes when no other thread is ready to run.
+@@ -459,11 +525,15 @@ init_thread (struct thread *t, const char *name, int priority)
+ 
+   memset (t, 0, sizeof *t);
+   t->status = THREAD_BLOCKED;
++  t->waiting_for.flag = false;
+   strlcpy (t->name, name, sizeof t->name);
+   t->stack = (uint8_t *) t + PGSIZE;
+   t->priority = priority;
++  t->original_priority = priority;
+   t->magic = THREAD_MAGIC;
+ 
++  list_init(&t->donation_list);
++  sema_init (&(t->timer),0);
+   old_level = intr_disable ();
+   list_push_back (&all_list, &t->allelem);
+   intr_set_level (old_level);
+@@ -482,6 +552,69 @@ alloc_frame (struct thread *t, size_t size)
+   return t->stack;
+ }
+ 
++struct thread *
++lookup_high_priority_thread(struct list *thread_list)
++{
++    struct thread *high_priority_thread = NULL;
++    int current_priority = -1;
++    struct list_elem *e = NULL;
++    if(list_size(thread_list)==0)
++      return NULL;
++    for (e = list_begin (thread_list); e != list_end (thread_list);
++       e = list_next (e))  
++       {
++         
++        struct thread *current_thread =   list_entry(e, struct thread,elem);
++        if(current_thread->priority > current_priority)
++          {
++            high_priority_thread = current_thread;
++            current_priority = current_thread->priority;
++
++          }
++       }
++       return high_priority_thread;
++
++}
++
++struct thread *
++get_high_priority_thread(struct list *ready_list)
++{
++  struct thread *high_priority_thread = NULL;
++  int current_priority = -1;
++  struct list_elem *e = NULL,*high_priority_elem = NULL;
++     if(list_empty(ready_list))
++      return NULL;
++
++  for (e = list_begin (ready_list); e != list_end (ready_list);
++       e = list_next (e))  
++       {
++         
++        struct thread *current_thread =   list_entry(e, struct thread,elem);
++       
++        if(current_thread->priority > current_priority)
++          {
++            high_priority_thread = current_thread;
++            current_priority = current_thread->priority;
++            high_priority_elem = e;
++
++          }
++
++        else if(current_thread->priority == current_priority && thread_mlfqs)
++        {
++            if(current_thread->recent_cpu < high_priority_thread->recent_cpu)
++            {
++              high_priority_thread = current_thread;
++              current_priority = current_thread->priority;
++              high_priority_elem = e;
++            }
++        }
++
++       }
++       high_priority_elem = list_remove(high_priority_elem);
++       return high_priority_thread;
++
++}
++
+ /* Chooses and returns the next thread to be scheduled.  Should
+    return a thread from the run queue, unless the run queue is
+    empty.  (If the running thread can continue running, then it
+@@ -493,7 +626,7 @@ next_thread_to_run (void)
+   if (list_empty (&ready_list))
+     return idle_thread;
+   else
+-    return list_entry (list_pop_front (&ready_list), struct thread, elem);
++    return get_high_priority_thread(&ready_list);
+ }
+ 
+ /* Completes a thread switch by activating the new thread's page
+@@ -565,6 +698,109 @@ schedule (void)
+   thread_schedule_tail (prev);
+ }
+ 
++/*  This function will do calculations based on this ticks */
++
++void mlfqscalculations(int64_t ticks)
++{
++  if(thread_mlfqs)
++  {
++    if(thread_current()->status == THREAD_RUNNING)
++    {
++      int current_recentcpu = thread_current()->recent_cpu;
++      thread_current()->recent_cpu = ADD_INTEGER(current_recentcpu,1);
++    }
++
++    if(ticks % TIMER_FREQ == 0)
++    {
++        calculateloadaverage();
++        calculaterecentcpuall();
++        calculatedynamicpriorityall();
++    }
++
++    if(ticks % TIME_SLICE == 0)
++    {
++        calculatedynamicpriority(thread_current());
++    }
++  }
++}
++
++void calculateloadaverage()
++{
++  int readylist_count = list_size(&ready_list);
++  if(thread_current() != idle_thread)
++      readylist_count = readylist_count+1;
++  
++  int div1 = DIVIDE_INTEGER (CONVERT_TO_FIXED_POINT (59), 60);
++  int load1 = MULTIPLY_FIXED_POINT (div1, getloadaverage());
++  int div2 = DIVIDE_INTEGER (CONVERT_TO_FIXED_POINT (1), 60);
++  int load2 = MULTIPLY_INTEGER (div2, readylist_count);
++  setloadaverage(load1+load2);
++  }
++
++void calculaterecentcpu(struct thread* t)
++{
++  if(t != idle_thread)
++  {
++    int temp = MULTIPLY_INTEGER(getloadaverage(),2);
++    int div = DIVIDE_FIXED_POINT (temp, ADD_INTEGER (temp, 1));
++    int mult = MULTIPLY_FIXED_POINT (div, t->recent_cpu);
++    t->recent_cpu =  ADD_INTEGER (mult,t->nice);
++  }
++}
++
++void calculaterecentcpuall()
++{  
++  for (struct list_elem *e = list_begin (&all_list); e != list_end (&all_list); e = list_next (e)) 
++    {
++      struct thread *thread = list_entry (e, struct thread, allelem );
++      calculaterecentcpu(thread);
++    }  
++}
++
++void calculatedynamicpriority(struct thread* t)
++{
++  if( t != idle_thread)
++  {
++    int div = DIVIDE_INTEGER(t->recent_cpu,4);
++    int mult = t->nice*2;
++    t->priority = PRI_MAX - CONVERT_TO_INTEGER_ROUNDED_NEAREST(div) - mult;
++
++    if(t->priority < PRI_MIN)
++      t->priority = PRI_MIN;
++    if(t->priority > PRI_MAX)
++      t->priority = PRI_MAX;
++  }
++  
++}
++
++void calculatedynamicpriorityall()
++{
++  if(list_empty(&all_list))
++      return;
++
++   for (struct list_elem *e = list_begin (&ready_list); e != list_end (&ready_list); e = list_next (e)) 
++    {
++      struct thread *thread = list_entry (e, struct thread, elem );
++      calculatedynamicpriority(thread);
++    }
++
++    if (!list_empty (&ready_list))
++    {
++      list_sort (&ready_list, priority_more, NULL);
++    }
++    
++}
++
++int getloadaverage(){
++
++    return load_average;
++}
++
++void setloadaverage(int value)
++{
++  load_average = value;
++}
++
+ /* Returns a tid to use for a new thread. */
+ static tid_t
+ allocate_tid (void) 
+diff --git a/src/threads/thread.h b/src/threads/thread.h
+index 7965c06..9aef4de 100644
+--- a/src/threads/thread.h
++++ b/src/threads/thread.h
+@@ -4,6 +4,7 @@
+ #include <debug.h>
+ #include <list.h>
+ #include <stdint.h>
++#include "synch.h"
+ 
+ /* States in a thread's life cycle. */
+ enum thread_status
+@@ -23,7 +24,14 @@ typedef int tid_t;
+ #define PRI_MIN 0                       /* Lowest priority. */
+ #define PRI_DEFAULT 31                  /* Default priority. */
+ #define PRI_MAX 63                      /* Highest priority. */
+-
++#define TIMER_FREQ 100
++struct donation_info
++{
++  struct list_elem elem;
++  int priority_donated;
++  struct thread *recipient;
++  bool flag;
++};
+ /* A kernel thread or user process.
+ 
+    Each thread structure is stored in its own 4 kB page.  The
+@@ -89,10 +97,17 @@ struct thread
+     uint8_t *stack;                     /* Saved stack pointer. */
+     int priority;                       /* Priority. */
+     struct list_elem allelem;           /* List element for all threads list. */
+-
++    struct semaphore timer;
++    int wake_time;
++    int original_priority;               // stores the original priority when donation happens
++    bool received_donation;               // tells whether it received donation or not
+     /* Shared between thread.c and synch.c. */
+     struct list_elem elem;              /* List element. */
+-
++    struct list_elem timer_elem;    
++    struct list donation_list;
++    struct donation_info waiting_for;
++    int nice;                             //holds nice value of the current.starts with 0
++    int recent_cpu;                       //holds the recent cpu value of the thread
+ #ifdef USERPROG
+     /* Owned by userprog/process.c. */
+     uint32_t *pagedir;                  /* Page directory. */
+@@ -126,6 +141,16 @@ const char *thread_name (void);
+ void thread_exit (void) NO_RETURN;
+ void thread_yield (void);
+ 
++void mlfqscalculations(int64_t ticks);
++void calculatedynamicpriority(struct thread* t);
++void calculatedynamicpriorityall(void);
++void calculateloadaverage(void);
++void calculaterecentcpu(struct thread* t);
++void calculaterecentcpuall(void);
++void setloadaverage(int value);
++int getloadaverage(void);
++
++
+ /* Performs some operation on thread t, given auxiliary data AUX. */
+ typedef void thread_action_func (struct thread *t, void *aux);
+ void thread_foreach (thread_action_func *, void *);
+@@ -137,5 +162,9 @@ int thread_get_nice (void);
+ void thread_set_nice (int);
+ int thread_get_recent_cpu (void);
+ int thread_get_load_avg (void);
++struct thread *lookup_high_priority_thread(struct list *thread_list);
++struct thread *get_high_priority_thread(struct list *thread_list);
++struct list timer_list;
++struct semaphore timer_sema;
+ 
+ #endif /* threads/thread.h */
+diff --git a/src/utils/squish-pty.o b/src/utils/squish-pty.o
+deleted file mode 100644
+index c1bcfb0..0000000
+Binary files a/src/utils/squish-pty.o and /dev/null differ
+diff --git a/src/utils/squish-unix.o b/src/utils/squish-unix.o
+deleted file mode 100644
+index fbfb0dc..0000000
+Binary files a/src/utils/squish-unix.o and /dev/null differ

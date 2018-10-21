@@ -29,6 +29,7 @@ static bool too_many_loops (unsigned loops);
 static void busy_wait (int64_t loops);
 static void real_time_sleep (int64_t num, int32_t denom);
 static void real_time_delay (int64_t num, int32_t denom);
+static void check_timer(void);
 
 /* Sets up the timer to interrupt TIMER_FREQ times per second,
    and registers the corresponding interrupt. */
@@ -84,16 +85,52 @@ timer_elapsed (int64_t then)
   return timer_ticks () - then;
 }
 
+static void check_timer(void)
+{
+  if(timer_sema.value == 0)
+    return;
+  if(list_empty(&timer_list))
+    return;  
+  for (struct list_elem *e = list_begin (&timer_list); e != list_end (&timer_list); e = list_next (e)) 
+    {
+      struct thread *thread = list_entry (e, struct thread,timer_elem );
+     if(timer_ticks() >= thread->wake_time)
+      {
+        list_remove(e);
+        sema_up(&(thread->timer));
+      }
+    else
+      break;
+    }
+
+}
+static bool timer_less_function (const struct list_elem *a,
+                             const struct list_elem *b,
+                             void *aux UNUSED)
+{
+  return ((list_entry(a,struct thread,timer_elem))->wake_time < ((list_entry(b,struct thread,timer_elem))->wake_time));
+}
+
 /* Sleeps for approximately TICKS timer ticks.  Interrupts must
    be turned on. */
 void
 timer_sleep (int64_t ticks) 
 {
   int64_t start = timer_ticks ();
-
-  ASSERT (intr_get_level () == INTR_ON);
-  while (timer_elapsed (start) < ticks) 
-    thread_yield ();
+  sema_down(&timer_sema);
+  
+  if(thread_current()->timer.value !=0)
+    sema_init(&(thread_current()->timer),0);
+   
+  thread_current()->wake_time = start + ticks;
+  
+  if(list_empty(&timer_list))
+    list_push_back(&timer_list,&(thread_current()->timer_elem));
+  else   
+    list_insert_ordered(&timer_list,&(thread_current()->timer_elem),timer_less_function,NULL);
+  
+  sema_up(&timer_sema);
+  sema_down(&(thread_current()->timer));
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -172,6 +209,10 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   ticks++;
   thread_tick ();
+  check_timer();
+  if(thread_mlfqs)
+    mlfqscalculations(ticks);  /* do all necessary calculations for mlfqs only if mlfqs is enabled */
+
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

@@ -31,6 +31,7 @@
 #include <string.h>
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "threads/malloc.h"
 
 /* Initializes semaphore SEMA to VALUE.  A semaphore is a
    nonnegative integer along with two atomic operators for
@@ -41,6 +42,8 @@
 
    - up or "V": increment the value (and wake up one waiting
      thread, if any). */
+void remove_donation(struct donation_info *donation);
+static void update_nested(struct donation_info *donation);
 void
 sema_init (struct semaphore *sema, unsigned value) 
 {
@@ -58,7 +61,7 @@ sema_init (struct semaphore *sema, unsigned value)
    interrupts disabled, but if it sleeps then the next scheduled
    thread will probably turn interrupts back on. */
 void
-sema_down (struct semaphore *sema) 
+sema_down (struct semaphore *sema) //acquire
 {
   enum intr_level old_level;
 
@@ -71,6 +74,8 @@ sema_down (struct semaphore *sema)
       list_push_back (&sema->waiters, &thread_current ()->elem);
       thread_block ();
     }
+
+  //list_push_back(&sema_holders,&thread_current ()->elem);
   sema->value--;
   intr_set_level (old_level);
 }
@@ -100,6 +105,18 @@ sema_try_down (struct semaphore *sema)
 
   return success;
 }
+void remove_donation(struct donation_info *donation)
+{
+
+  list_remove(&donation->elem);
+  if(!list_empty(&donation->recipient->donation_list))
+  {
+    struct donation_info *first_entry = list_entry(list_front(&donation->recipient->donation_list),struct donation_info,elem);
+    donation->recipient->priority = first_entry->priority_donated;
+  }
+  else
+    donation->recipient->priority = donation->recipient->original_priority;
+}
 
 /* Up or "V" operation on a semaphore.  Increments SEMA's value
    and wakes up one thread of those waiting for SEMA, if any.
@@ -114,10 +131,28 @@ sema_up (struct semaphore *sema)
 
   old_level = intr_disable ();
   if (!list_empty (&sema->waiters)) 
-    thread_unblock (list_entry (list_pop_front (&sema->waiters),
-                                struct thread, elem));
-  sema->value++;
-  intr_set_level (old_level);
+  {
+    struct thread* hpt = get_high_priority_thread(&sema->waiters);
+    if(!thread_mlfqs && hpt->waiting_for.flag)
+     { 
+        remove_donation(&hpt->waiting_for);
+        hpt->waiting_for.flag = false;
+     }
+    thread_unblock(hpt);
+    sema->value++;
+    intr_set_level (old_level);
+    
+    if(thread_current()->priority < hpt->priority)  
+      (intr_context()) ? intr_yield_on_return() : thread_yield();
+      
+  }
+  else
+  {
+      if(!list_empty (&sema->waiters))
+      thread_unblock(list_entry(list_pop_front(&sema->waiters),struct thread,elem)) ;
+      sema->value++;
+      intr_set_level (old_level);
+  }
 }
 
 static void sema_test_helper (void *sema_);
@@ -189,14 +224,53 @@ lock_init (struct lock *lock)
    interrupt handler.  This function may be called with
    interrupts disabled, but interrupts will be turned back on if
    we need to sleep. */
+static bool donation_greater_function(const struct list_elem *elem1,const struct list_elem *elem2,void *aux UNUSED)
+{
+  return list_entry(elem1,struct donation_info,elem)->priority_donated > list_entry(elem2,struct donation_info,elem)->priority_donated; 
+}
+
+/*
+priority nested implementation
+
+*/
+static void update_nested(struct donation_info *donation)
+{
+  struct thread *child_thread = donation->recipient;
+  while(child_thread->waiting_for.flag)
+  {
+    struct list_elem *e = &child_thread->waiting_for.elem;
+    list_remove(&(child_thread->waiting_for.elem));
+    struct donation_info *child_donation = list_entry(e,struct donation_info,elem);
+    child_donation->priority_donated = donation->priority_donated;
+    child_donation->recipient->priority = donation->priority_donated;
+    list_insert_ordered(&child_donation->recipient->donation_list,&child_donation->elem,donation_greater_function,NULL);
+    child_thread = child_thread->waiting_for.recipient;
+    
+  }
+}
 void
 lock_acquire (struct lock *lock)
 {
   ASSERT (lock != NULL);
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
-
-  sema_down (&lock->semaphore);
+  struct thread* current_thread = NULL;
+  struct thread* lock_holder = NULL;
+  current_thread = thread_current();
+  lock_holder = lock->holder;
+  struct donation_info *donation = &current_thread->waiting_for;
+  
+  if(lock_holder!=NULL && lock_holder->priority < current_thread->priority && !thread_mlfqs)
+  {
+     lock_holder->priority = current_thread->priority;
+     lock_holder->received_donation = true;
+     donation->priority_donated = current_thread->priority;
+     donation->recipient = lock_holder;
+    current_thread->waiting_for.flag = true;
+    update_nested(donation); 
+    list_insert_ordered(&lock_holder->donation_list,&donation->elem,donation_greater_function,NULL);
+  }
+   sema_down (&lock->semaphore);
   lock->holder = thread_current ();
 }
 
@@ -301,6 +375,21 @@ cond_wait (struct condition *cond, struct lock *lock)
   lock_acquire (lock);
 }
 
+static bool
+cond_more (const struct list_elem *a, const struct list_elem *b,
+               void *aux UNUSED)
+{
+  ASSERT (a != NULL);
+  ASSERT (b != NULL);
+  struct semaphore_elem *sema1 = list_entry (a, struct semaphore_elem, elem);
+  struct semaphore_elem *sema2 = list_entry (b, struct semaphore_elem, elem);
+
+   struct thread *t1 = list_entry (list_front(&sema1->semaphore.waiters), struct thread, elem);
+   struct thread *t2 = list_entry (list_front(&sema2->semaphore.waiters), struct thread, elem);
+
+  return t1->priority > t2->priority;
+}
+
 /* If any threads are waiting on COND (protected by LOCK), then
    this function signals one of them to wake up from its wait.
    LOCK must be held before calling this function.
@@ -315,6 +404,8 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (lock != NULL);
   ASSERT (!intr_context ());
   ASSERT (lock_held_by_current_thread (lock));
+
+  list_sort(&cond->waiters, cond_more, NULL);
 
   if (!list_empty (&cond->waiters)) 
     sema_up (&list_entry (list_pop_front (&cond->waiters),

@@ -4,6 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
+#include "synch.h"
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -23,7 +24,14 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
-
+#define TIMER_FREQ 100
+struct donation_info
+{
+  struct list_elem elem;
+  int priority_donated;
+  struct thread *recipient;
+  bool flag;
+};
 /* A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -89,10 +97,17 @@ struct thread
     uint8_t *stack;                     /* Saved stack pointer. */
     int priority;                       /* Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
-
+    struct semaphore timer;
+    int wake_time;
+    int original_priority;               // stores the original priority when donation happens
+    bool received_donation;               // tells whether it received donation or not
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
-
+    struct list_elem timer_elem;    
+    struct list donation_list;
+    struct donation_info waiting_for;
+    int nice;                             //holds nice value of the current.starts with 0
+    int recent_cpu;                       //holds the recent cpu value of the thread
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
@@ -126,6 +141,16 @@ const char *thread_name (void);
 void thread_exit (void) NO_RETURN;
 void thread_yield (void);
 
+void mlfqscalculations(int64_t ticks);
+void calculatedynamicpriority(struct thread* t);
+void calculatedynamicpriorityall(void);
+void calculateloadaverage(void);
+void calculaterecentcpu(struct thread* t);
+void calculaterecentcpuall(void);
+void setloadaverage(int value);
+int getloadaverage(void);
+
+
 /* Performs some operation on thread t, given auxiliary data AUX. */
 typedef void thread_action_func (struct thread *t, void *aux);
 void thread_foreach (thread_action_func *, void *);
@@ -137,5 +162,9 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+struct thread *lookup_high_priority_thread(struct list *thread_list);
+struct thread *get_high_priority_thread(struct list *thread_list);
+struct list timer_list;
+struct semaphore timer_sema;
 
 #endif /* threads/thread.h */
