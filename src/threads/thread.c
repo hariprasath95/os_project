@@ -11,9 +11,8 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
-#ifdef USERPROG
 #include "userprog/process.h"
-#endif
+
 
 /* Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
@@ -149,10 +148,8 @@ thread_tick (void)
   /* Update statistics. */
   if (t == idle_thread)
     idle_ticks++;
-#ifdef USERPROG
   else if (t->pagedir != NULL)
     user_ticks++;
-#endif
   else
     kernel_ticks++;
 
@@ -225,6 +222,16 @@ thread_create (const char *name, int priority,
 
     if (!thread_mlfqs && priority > thread_current ()-> priority)
       thread_yield();
+
+  
+  sema_init(&t->sema_process_wait, 0);
+	sema_init(&t->sema_process_load, 0);
+	sema_init(&t->sema_process_exit, 0);
+  t->return_value = 1;
+	t->is_wait = false;
+	t->is_exit = false;
+	t->parent = thread_current();
+
   
   return tid;
 }
@@ -307,9 +314,7 @@ thread_exit (void)
 {
   ASSERT (!intr_context ());
 
-#ifdef USERPROG
   process_exit ();
-#endif
 
   /* Remove thread from all threads list, set our status to dying,
      and schedule another process.  That process will destroy us
@@ -655,10 +660,8 @@ thread_schedule_tail (struct thread *prev)
   /* Start new time slice. */
   thread_ticks = 0;
 
-#ifdef USERPROG
   /* Activate the new address space. */
   process_activate ();
-#endif
 
   /* If the thread we switched from is dying, destroy its struct
      thread.  This must happen late so that thread_exit() doesn't
@@ -815,3 +818,15 @@ allocate_tid (void)
 /* Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+
+struct thread* id_to_thread(tid_t id)
+{
+  for (struct list_elem *e = list_begin (&all_list); e != list_end (&all_list); e = list_next (e)) 
+    {
+      struct thread *thread = list_entry (e, struct thread, allelem );
+      if(thread == NULL)
+        return NULL;
+      if(thread->tid == id)
+        return thread;
+    }
+}

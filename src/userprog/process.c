@@ -30,18 +30,42 @@ process_execute (const char *file_name)
 {
   char *fn_copy;
   tid_t tid;
-
+  sema_init(&child_sema,0);
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
-  if (fn_copy == NULL)
+  char *fn_copy1 = palloc_get_page (0);
+  
+  if (fn_copy == NULL || fn_copy1 == NULL)
     return TID_ERROR;
+    // printf("before strcpy:%s\n",file_name);
   strlcpy (fn_copy, file_name, PGSIZE);
-
+    strlcpy (fn_copy1, file_name, PGSIZE);
+  // printf("after strlcpy:\n");
+  char *aux_ptr,*cmd_name;
+  // printf("before strok:\n");
+  cmd_name = strtok_r(fn_copy1," ",&aux_ptr);
+  // printf("after
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  // printf("before:\n");
+  tid = thread_create (cmd_name, PRI_DEFAULT, start_process, fn_copy);
+  palloc_free_page(fn_copy1);
+  // printf("after:\n");
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy); 
+  {
+    palloc_free_page (fn_copy);   
+    return tid;
+  }
+
+  struct thread* t = id_to_thread(tid);
+  if(t!= NULL)
+  {
+   // printf("\nwaiting for load");
+    sema_down(&t->sema_process_load);
+   // printf("\nload completed");
+    if(t->return_value == 0)
+    return TID_ERROR;
+  }
   return tid;
 }
 
@@ -60,12 +84,19 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
-
+  struct thread* current =  thread_current();
   /* If load failed, quit. */
-  palloc_free_page (file_name);
-  if (!success) 
+  if (!success)
+  {
+    palloc_free_page (file_name);
+    current->return_value = 0;
+    sema_up(&current->sema_process_load); 
     thread_exit ();
+  }
 
+  sema_up(&current->sema_process_load); 
+  //sema_up(&thread_current()->sema_process_load); 
+  //thread_exit();
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -88,7 +119,23 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  return -1;
+    //printf("hello");
+  struct thread* child = id_to_thread(child_tid);
+  struct thread* current = thread_current();
+  if(child == NULL || child->parent != current || child->is_wait)
+    return -1;
+
+  if (child->return_value != 1 || child->is_exit)
+		return child->return_value;
+
+  //printf("hello");
+  sema_down(&child->sema_process_wait);
+	int ret = child->return_value;
+	sema_up(&child->sema_process_exit);
+	child->is_wait = true;
+
+	return ret;
+
 }
 
 /* Free the current process's resources. */
@@ -98,6 +145,13 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
+  while (!list_empty(&cur->sema_process_wait.waiters))
+		sema_up(&cur->sema_process_wait);
+
+  cur->is_exit =true;
+
+	if (cur->parent != NULL)
+		sema_down(&cur->sema_process_exit);
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
@@ -195,7 +249,7 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp);
+static bool setup_stack (void **esp,char *file_name);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -222,7 +276,8 @@ load (const char *file_name, void (**eip) (void), void **esp)
   process_activate ();
 
   /* Open executable file. */
-  file = filesys_open (file_name);
+  struct thread *current_thread = thread_current();
+  file = filesys_open (current_thread->name);
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
@@ -302,7 +357,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp))
+  if (!setup_stack (esp,file_name))
     goto done;
 
   /* Start address. */
@@ -423,11 +478,41 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
     }
   return true;
 }
-
+static void *push_args_stack(void *esp,char *file_name)
+{
+  char * save_ptr;
+  char *argv_addrs[100];
+  int token_count = 0;
+  void *start_esp = esp;
+  for(char *token = strtok_r(file_name," ",&save_ptr);
+      token !=NULL;
+      token = strtok_r(NULL," ",&save_ptr),token_count++)
+  {
+    int len = strlen(token)+1;
+    esp = esp - len;
+    memcpy(esp,token,len);
+    argv_addrs[token_count] = esp;
+  }
+  esp = esp - (start_esp - esp) % 4;
+  esp = esp - sizeof(char *);
+  *(char *)esp = 0;
+  for(int i = token_count -1 ; i>=0; i--)
+  {
+    esp = esp - sizeof(char *);
+    *(char **)esp = argv_addrs[i];  
+  }
+    esp = esp - sizeof(char *);
+  *(char **)esp = esp + sizeof(char *);
+  esp = esp - sizeof(int);
+  *(int *)esp = token_count;
+  esp = esp - sizeof(void *);
+  *(char **)esp = 0;
+  return esp;
+}
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp) 
+setup_stack (void **esp, char *file_name) 
 {
   uint8_t *kpage;
   bool success = false;
@@ -437,7 +522,10 @@ setup_stack (void **esp)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
+      {
         *esp = PHYS_BASE;
+        *esp = push_args_stack(*esp,file_name);
+       }
       else
         palloc_free_page (kpage);
     }

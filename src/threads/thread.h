@@ -108,10 +108,17 @@ struct thread
     struct donation_info waiting_for;
     int nice;                             //holds nice value of the current.starts with 0
     int recent_cpu;                       //holds the recent cpu value of the thread
-#ifdef USERPROG
     /* Owned by userprog/process.c. */
     uint32_t *pagedir;                  /* Page directory. */
-#endif
+    struct condition my_waiters;
+    bool is_wait;
+    bool is_exit;
+    struct thread* parent;
+    int return_value;
+    struct semaphore sema_process_load;
+	  struct semaphore sema_process_wait;
+	  struct semaphore sema_process_exit;
+
 
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
@@ -166,5 +173,6 @@ struct thread *lookup_high_priority_thread(struct list *thread_list);
 struct thread *get_high_priority_thread(struct list *thread_list);
 struct list timer_list;
 struct semaphore timer_sema;
+struct thread* id_to_thread(tid_t id);
 
 #endif /* threads/thread.h */
