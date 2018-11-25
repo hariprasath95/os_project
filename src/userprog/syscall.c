@@ -38,17 +38,20 @@ static void clear_fd()
     return;
   }
 
-  for (e = list_begin(&files_list); e != list_end(&files_list);
-       e = list_next(e))
+  for (e = list_begin(&files_list); e != list_end(&files_list);)
   {
     struct file_info *f = list_entry(e, struct file_info, files_list);
+    
     if (f->held_by->tid == thread_current()->tid )
     {
         file_close(f->file_ptr);
-        printf("closing %s",f->file_name);
-        list_remove(e);
+        struct list_elem *curr = e;
+        e= list_next(e);
+        list_remove(curr);
         free(f);      
     }
+    else
+      e = e->next;
   }
 
 
@@ -59,7 +62,7 @@ static void exit_function(int code)
 {
   thread_current()->return_value = code;
   printf("%s: exit(%d)\n", thread_current()->name, code);
-    //clear_fd();
+    clear_fd();
     sema_up(&child_sema);
     thread_exit();
 }

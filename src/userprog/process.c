@@ -359,7 +359,7 @@ load (const char *file_name, void (**eip) (void), void **esp)
   /* Set up stack. */
   if (!setup_stack (esp,file_name))
     goto done;
-
+  palloc_free_page(file_name);
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
 
