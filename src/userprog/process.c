@@ -31,26 +31,24 @@ process_execute (const char *file_name)
   char *fn_copy;
   tid_t tid;
   sema_init(&child_sema,0);
+
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
+     
   fn_copy = palloc_get_page (0);
   char *fn_copy1 = palloc_get_page (0);
   
   if (fn_copy == NULL || fn_copy1 == NULL)
     return TID_ERROR;
-    // printf("before strcpy:%s\n",file_name);
+  
   strlcpy (fn_copy, file_name, PGSIZE);
-    strlcpy (fn_copy1, file_name, PGSIZE);
-  // printf("after strlcpy:\n");
+  strlcpy (fn_copy1, file_name, PGSIZE);
   char *aux_ptr,*cmd_name;
-  // printf("before strok:\n");
   cmd_name = strtok_r(fn_copy1," ",&aux_ptr);
-  // printf("after
+
   /* Create a new thread to execute FILE_NAME. */
-  // printf("before:\n");
   tid = thread_create (cmd_name, PRI_DEFAULT, start_process, fn_copy);
   palloc_free_page(fn_copy1);
-  // printf("after:\n");
   if (tid == TID_ERROR)
   {
     palloc_free_page (fn_copy);   
@@ -60,9 +58,7 @@ process_execute (const char *file_name)
   struct thread* t = id_to_thread(tid);
   if(t!= NULL)
   {
-   // printf("\nwaiting for load");
     sema_down(&t->sema_process_load);
-   // printf("\nload completed");
     if(t->return_value == 0)
     return TID_ERROR;
   }
@@ -119,22 +115,25 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-    //printf("hello");
   struct thread* child = id_to_thread(child_tid);
   struct thread* current = thread_current();
-  if(child == NULL || child->parent != current || child->is_wait)
-    return -1;
+  if(child != NULL && child->parent == current && !child->is_wait)
+   { 
 
-  if (child->return_value != 1 || child->is_exit)
-		return child->return_value;
+    if (child->return_value != 1 || child->is_exit)
+		  return child->return_value;
 
-  //printf("hello");
-  sema_down(&child->sema_process_wait);
-	int ret = child->return_value;
-	sema_up(&child->sema_process_exit);
-	child->is_wait = true;
+    sema_down(&child->sema_process_wait);
+	  int ret = child->return_value;
+	  sema_up(&child->sema_process_exit);
+	  child->is_wait = true;
+	  return ret;
+   }
 
-	return ret;
+   else
+   {
+     return -1;
+   }
 
 }
 

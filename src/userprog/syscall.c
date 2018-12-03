@@ -240,7 +240,6 @@ syscall_handler(struct intr_frame *f UNUSED)
   break;
 
   case SYS_EXEC:
-	    //tid = process_execute((char *)args[1]);
 	    invalid_panic((char*)args[1]);
       lock_acquire(&files_lock);
 	    f->eax =  tid;
@@ -251,7 +250,6 @@ syscall_handler(struct intr_frame *f UNUSED)
        f->eax = process_wait(args[1]);
       break;
   case SYS_REMOVE:
-    //invalid_panic((char *)args[1]);
 		lock_acquire(&files_lock);
 		bool success = filesys_remove((char *)args[1]);
 		lock_release(&files_lock);
